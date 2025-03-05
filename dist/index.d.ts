@@ -1,6 +1,5 @@
 import { Readable } from 'node:stream';
 import { Service, ISpeechService, ServiceType, IAgentRuntime, ITranscriptionService } from '@elizaos/core';
-import { EventEmitter } from 'events';
 
 declare class SpeechService extends Service implements ISpeechService {
     static serviceType: ServiceType;
@@ -72,9 +71,9 @@ declare class TranscriptionService extends Service implements ITranscriptionServ
      * Transcribes audio locally with streaming results.
      * This method processes the audio and emits transcription results as they become available.
      * @param audioBuffer The audio buffer to transcribe
-     * @returns EventEmitter that emits 'transcription' events with partial results and 'complete' with the final result
+     * @returns An AsyncGenerator that yields partial transcription results and completes with the final result
      */
-    transcribeLocallyStreaming(audioBuffer: ArrayBuffer): EventEmitter;
+    transcribeLocallyStreaming(audioBuffer: ArrayBuffer): AsyncGenerator<string, string, undefined>;
     /**
      * Checks if a whisper model is already downloaded.
      * @param modelName The name of the model to check
@@ -98,6 +97,15 @@ declare class TranscriptionService extends Service implements ITranscriptionServ
     transcribeLocally(audioBuffer: ArrayBuffer): Promise<string | null>;
 }
 
+interface IStreamingTranscriptionService extends ITranscriptionService {
+    /**
+     * Transcribes audio locally with streaming capabilities using an AsyncGenerator
+     * @param audioBuffer The audio buffer to transcribe
+     * @returns An AsyncGenerator that yields partial transcription results and completes with the final result
+     */
+    transcribeLocallyStreaming(audioBuffer: ArrayBuffer): AsyncGenerator<string, string, undefined>;
+}
+
 declare const speechTTS: {
     name: string;
     description: string;
@@ -105,4 +113,4 @@ declare const speechTTS: {
     actions: any[];
 };
 
-export { SpeechService, type TranscriptionOptions, TranscriptionService, speechTTS as default };
+export { type IStreamingTranscriptionService, SpeechService, type TranscriptionOptions, TranscriptionService, speechTTS as default };

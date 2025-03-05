@@ -3,6 +3,7 @@ import {
   TranscriptionService,
   TranscriptionOptions,
 } from './services/index.js';
+import { IStreamingTranscriptionService } from './types.js';
 
 const speechTTS = {
   name: 'default',
@@ -12,6 +13,11 @@ const speechTTS = {
 };
 
 // Explicitly re-export the services so they're available in the built package
-export { SpeechService, TranscriptionService, TranscriptionOptions };
+export {
+  SpeechService,
+  TranscriptionService,
+  TranscriptionOptions,
+  IStreamingTranscriptionService,
+};
 
 export default speechTTS;
