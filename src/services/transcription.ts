@@ -17,6 +17,7 @@ import { fileURLToPath } from 'url';
 import { promisify } from 'util';
 import { createClient, DeepgramClient } from '@deepgram/sdk';
 import { TranscriptionOptions } from './transcriptionOptions';
+import { EventEmitter } from 'events';
 
 // const __dirname = path.dirname(new URL(import.meta.url).pathname); #compatibility issues with windows
 const __filename = fileURLToPath(import.meta.url);
@@ -434,6 +435,156 @@ export class TranscriptionService
       }
       return null;
     }
+  }
+
+  /**
+   * Transcribes audio locally with streaming results.
+   * This method processes the audio and emits transcription results as they become available.
+   * @param audioBuffer The audio buffer to transcribe
+   * @returns EventEmitter that emits 'transcription' events with partial results and 'complete' with the final result
+   */
+  public transcribeLocallyStreaming(audioBuffer: ArrayBuffer): EventEmitter {
+    const emitter = new EventEmitter();
+
+    (async () => {
+      try {
+        elizaLogger.log('Transcribing audio locally with streaming...');
+
+        // Get the model name to use
+        const modelName =
+          this.transcriptionOptions?.localModelName ?? 'base.en';
+
+        // Check if the model is already preloaded, if not, wait for it to complete
+        if (!this.isWhisperModelPreloaded) {
+          elizaLogger.log(
+            `Whisper model not yet preloaded, waiting for download to complete...`,
+          );
+
+          try {
+            // This will either start a new download or wait for an existing one
+            const downloadResult = await this.preloadWhisperModel(modelName);
+
+            if (!downloadResult) {
+              elizaLogger.error(
+                `Failed to download whisper model ${modelName}, will try fallback approach`,
+              );
+              emitter.emit(
+                'error',
+                new Error(`Failed to download whisper model ${modelName}`),
+              );
+              return;
+            }
+          } catch (downloadError) {
+            elizaLogger.error(
+              `Error during whisper model download: ${downloadError}`,
+            );
+            emitter.emit('error', downloadError);
+            return;
+          }
+        }
+
+        await this.saveDebugAudio(
+          audioBuffer,
+          'local_streaming_input_original',
+        );
+
+        const arrayBuffer = new Uint8Array(audioBuffer).buffer;
+        const convertedBuffer = Buffer.from(
+          await this.convertAudio(arrayBuffer),
+        ).buffer;
+
+        await this.saveDebugAudio(
+          convertedBuffer,
+          'local_streaming_input_converted',
+        );
+
+        const tempWavFile = path.join(
+          this.CONTENT_CACHE_DIR,
+          `temp_streaming_${Date.now()}.wav`,
+        );
+
+        // Convert the ArrayBuffer to a Uint8Array which fs.writeFileSync can handle
+        const uint8Array = new Uint8Array(convertedBuffer);
+        fs.writeFileSync(tempWavFile, uint8Array);
+
+        elizaLogger.debug(
+          `Temporary WAV file created for streaming: ${tempWavFile}`,
+        );
+
+        // Create a buffer to accumulate transcription results
+        let accumulatedText = '';
+
+        // Use nodewhisper with word timestamps to enable streaming-like behavior
+        const output = await nodewhisper(tempWavFile, {
+          modelName: modelName,
+          autoDownloadModelName: modelName,
+          removeWavFileAfterTranscription: false,
+          withCuda: this.isCudaAvailable,
+          whisperOptions: {
+            outputInText: true,
+            outputInVtt: false,
+            outputInSrt: false,
+            outputInCsv: false,
+            translateToEnglish: false,
+            wordTimestamps: true, // Enable word timestamps for streaming
+            timestamps_length: 10, // Smaller segments for more frequent updates
+            splitOnWord: true, // Split on word boundaries
+          },
+        });
+
+        // Process the output to simulate streaming
+        const lines = output.split('\n');
+        let currentSegment = '';
+
+        for (const line of lines) {
+          // Check if this is a timestamp line (starts with '[')
+          if (line.trim().startsWith('[')) {
+            // If we have accumulated text in the current segment, emit it
+            if (currentSegment.trim()) {
+              accumulatedText += ' ' + currentSegment.trim();
+              emitter.emit('transcription', accumulatedText.trim());
+              currentSegment = '';
+            }
+
+            // Extract the text part after the timestamp
+            const endIndex = line.indexOf(']');
+            if (endIndex !== -1) {
+              currentSegment = line.substring(endIndex + 1).trim();
+            }
+          } else if (line.trim()) {
+            // Append non-empty lines to the current segment
+            currentSegment += ' ' + line.trim();
+          }
+        }
+
+        // Emit any remaining text
+        if (currentSegment.trim()) {
+          accumulatedText += ' ' + currentSegment.trim();
+          emitter.emit('transcription', accumulatedText.trim());
+        }
+
+        // Clean up the temporary file
+        fs.unlinkSync(tempWavFile);
+
+        // Emit the complete event with the final transcription
+        if (accumulatedText.trim()) {
+          emitter.emit('complete', accumulatedText.trim());
+        } else {
+          emitter.emit(
+            'error',
+            new Error('Transcription produced empty result'),
+          );
+        }
+      } catch (error) {
+        elizaLogger.error(
+          'Error in local streaming speech-to-text conversion:',
+          error,
+        );
+        emitter.emit('error', error);
+      }
+    })();
+
+    return emitter;
   }
 
   /**
