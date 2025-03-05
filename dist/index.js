@@ -15,10 +15,7 @@ function getWavHeader(audioLength, sampleRate, channelCount = 1, bitsPerSample =
   wavHeader.writeUInt16LE(1, 20);
   wavHeader.writeUInt16LE(channelCount, 22);
   wavHeader.writeUInt32LE(sampleRate, 24);
-  wavHeader.writeUInt32LE(
-    sampleRate * bitsPerSample * channelCount / 8,
-    28
-  );
+  wavHeader.writeUInt32LE(sampleRate * bitsPerSample * channelCount / 8, 28);
   wavHeader.writeUInt16LE(bitsPerSample * channelCount / 8, 32);
   wavHeader.writeUInt16LE(bitsPerSample, 34);
   wavHeader.write("data", 36);
@@ -94,7 +91,10 @@ async function textToSpeech(runtime, text) {
     elizaLogger.log("sending request to Eleven Labs API");
     elizaLogger.log("Eleven Labs voice ID:", elevenlabsVoiceId);
     elizaLogger.log("Eleven Labs model ID:", elevenlabsModel);
-    elizaLogger.log("Eleven Labs streaming latency:", elevenlabsStreamingLatency);
+    elizaLogger.log(
+      "Eleven Labs streaming latency:",
+      elevenlabsStreamingLatency
+    );
     elizaLogger.log("Eleven Labs output format:", elevenlabsOutputFormat);
     elizaLogger.log("Eleven Labs similarity boost:", elevenlabsSimilarity);
     elizaLogger.log("Eleven Labs stability:", elevenlabsStability);
@@ -125,9 +125,7 @@ async function textToSpeech(runtime, text) {
       const errorBodyString = await response.text();
       const errorBody = JSON.parse(errorBodyString);
       if (status === 401 && ((_a = errorBody.detail) == null ? void 0 : _a.status) === "quota_exceeded") {
-        elizaLogger.log(
-          "ElevenLabs quota exceeded, falling back to VITS"
-        );
+        elizaLogger.log("ElevenLabs quota exceeded, falling back to VITS");
         throw new Error("QUOTA_EXCEEDED");
       }
       throw new Error(
@@ -135,9 +133,7 @@ async function textToSpeech(runtime, text) {
       );
     }
     if (response) {
-      const webStream = ReadableStream.from(
-        response.body
-      );
+      const webStream = ReadableStream.from(response.body);
       const reader = webStream.getReader();
       const readable = new Readable({
         read() {
@@ -151,9 +147,7 @@ async function textToSpeech(runtime, text) {
         }
       });
       if (elevenlabsOutputFormat.startsWith("pcm_")) {
-        const sampleRate = parseInt(
-          elevenlabsOutputFormat.substring(4)
-        );
+        const sampleRate = parseInt(elevenlabsOutputFormat.substring(4));
         const withHeader = prependWavHeader(
           readable,
           1024 * 1024 * 100,
@@ -252,6 +246,7 @@ async function generateVitsAudio(runtime, text) {
 }
 var SpeechService = class _SpeechService extends Service {
   static serviceType = ServiceType.SPEECH_GENERATION;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async initialize(_runtime) {
   }
   getInstance() {
@@ -312,6 +307,12 @@ var TranscriptionService = class extends Service2 {
    */
   queue = [];
   processing = false;
+  transcriptionOptions;
+  isWhisperModelPreloaded = false;
+  // Track if a download is currently in progress
+  isDownloadInProgress = false;
+  // Promise to track the current download process
+  currentDownloadPromise = null;
   /**
    * CHANGED: initialize() now checks:
    * 1) character.settings.transcription (if available and keys exist),
@@ -319,14 +320,21 @@ var TranscriptionService = class extends Service2 {
    * 3) then old fallback logic (Deepgram -> OpenAI -> local).
    */
   async initialize(_runtime) {
-    var _a, _b;
+    var _a, _b, _c, _d, _e;
     this.runtime = _runtime;
-    const openaiBaseURL = this.runtime.getSetting(
-      "OPENAI_API_URL"
-    );
+    const openaiBaseURL = this.runtime.getSetting("OPENAI_API_URL");
     elizaLogger2.log("OPENAI_API_URL", openaiBaseURL);
+    this.isWhisperModelPreloaded = false;
+    const modelName = ((_a = this.transcriptionOptions) == null ? void 0 : _a.localModelName) ?? "base.en";
+    const isAlreadyDownloaded = await this.isWhisperModelDownloaded(modelName);
+    if (isAlreadyDownloaded) {
+      this.isWhisperModelPreloaded = true;
+      elizaLogger2.log(
+        `Whisper model ${modelName} is already downloaded and ready to use`
+      );
+    }
     let chosenProvider = null;
-    const charSetting = (_b = (_a = this.runtime.character) == null ? void 0 : _a.settings) == null ? void 0 : _b.transcription;
+    const charSetting = (_c = (_b = this.runtime.character) == null ? void 0 : _b.settings) == null ? void 0 : _c.transcription;
     if (charSetting === TranscriptionProvider.Deepgram) {
       const deepgramKey = this.runtime.getSetting("DEEPGRAM_API_KEY");
       if (deepgramKey) {
@@ -341,11 +349,11 @@ var TranscriptionService = class extends Service2 {
       }
     } else if (charSetting === TranscriptionProvider.Local) {
       chosenProvider = TranscriptionProvider.Local;
+      const modelName2 = ((_d = this.transcriptionOptions) == null ? void 0 : _d.localModelName) ?? "base.en";
+      this.preloadWhisperModel(modelName2);
     }
     if (!chosenProvider) {
-      const envProvider = this.runtime.getSetting(
-        "TRANSCRIPTION_PROVIDER"
-      );
+      const envProvider = this.runtime.getSetting("TRANSCRIPTION_PROVIDER");
       if (envProvider) {
         switch (envProvider.toLowerCase()) {
           case "deepgram":
@@ -361,7 +369,10 @@ var TranscriptionService = class extends Service2 {
             {
               const openaiKey = this.runtime.getSetting("OPENAI_API_KEY");
               if (openaiKey) {
-                this.openai = new OpenAI({ apiKey: openaiKey, baseURL: openaiBaseURL });
+                this.openai = new OpenAI({
+                  apiKey: openaiKey,
+                  baseURL: openaiBaseURL
+                });
                 chosenProvider = TranscriptionProvider.OpenAI;
               }
             }
@@ -380,19 +391,29 @@ var TranscriptionService = class extends Service2 {
       } else {
         const openaiKey = this.runtime.getSetting("OPENAI_API_KEY");
         if (openaiKey) {
-          this.openai = new OpenAI({ apiKey: openaiKey, baseURL: openaiBaseURL });
+          this.openai = new OpenAI({
+            apiKey: openaiKey,
+            baseURL: openaiBaseURL
+          });
           chosenProvider = TranscriptionProvider.OpenAI;
         } else {
           chosenProvider = TranscriptionProvider.Local;
+          const modelName2 = ((_e = this.transcriptionOptions) == null ? void 0 : _e.localModelName) ?? "base.en";
+          this.preloadWhisperModel(modelName2);
         }
       }
     }
     this.transcriptionProvider = chosenProvider;
     this.detectCuda();
   }
-  constructor() {
+  constructor(transcriptionOptions) {
+    var _a;
     super();
-    const rootDir = path.resolve(__dirname, "../../");
+    this.transcriptionOptions = {
+      rootDir: (transcriptionOptions == null ? void 0 : transcriptionOptions.rootDir) ?? path.resolve(__dirname, "../../"),
+      localModelName: (transcriptionOptions == null ? void 0 : transcriptionOptions.localModelName) ?? "base.en"
+    };
+    const rootDir = (_a = this.transcriptionOptions) == null ? void 0 : _a.rootDir;
     this.CONTENT_CACHE_DIR = path.join(rootDir, "content_cache");
     this.DEBUG_AUDIO_DIR = path.join(rootDir, "debug_audio");
     this.ensureCacheDirectoryExists();
@@ -418,9 +439,7 @@ var TranscriptionService = class extends Service2 {
           "CUDA detected. Transcription will use CUDA acceleration."
         );
       } catch (_error) {
-        elizaLogger2.log(
-          "CUDA not detected. Transcription will run on CPU."
-        );
+        elizaLogger2.log("CUDA not detected. Transcription will run on CPU.");
       }
     } else if (platform === "win32") {
       const cudaPath = path.join(
@@ -434,9 +453,7 @@ var TranscriptionService = class extends Service2 {
           "CUDA detected. Transcription will use CUDA acceleration."
         );
       } else {
-        elizaLogger2.log(
-          "CUDA not detected. Transcription will run on CPU."
-        );
+        elizaLogger2.log("CUDA not detected. Transcription will run on CPU.");
       }
     } else {
       elizaLogger2.log(
@@ -558,11 +575,10 @@ var TranscriptionService = class extends Service2 {
     try {
       await this.saveDebugAudio(audioBuffer, "openai_input_original");
       const arrayBuffer = new Uint8Array(audioBuffer).buffer;
-      const convertedBuffer = Buffer.from(await this.convertAudio(arrayBuffer)).buffer;
-      await this.saveDebugAudio(
-        convertedBuffer,
-        "openai_input_converted"
-      );
+      const convertedBuffer = Buffer.from(
+        await this.convertAudio(arrayBuffer)
+      ).buffer;
+      await this.saveDebugAudio(convertedBuffer, "openai_input_converted");
       const file = new File([convertedBuffer], "audio.wav", {
         type: "audio/wav"
       });
@@ -576,10 +592,7 @@ var TranscriptionService = class extends Service2 {
       elizaLogger2.log(`OpenAI speech to text result: "${trimmedResult}"`);
       return trimmedResult;
     } catch (error) {
-      elizaLogger2.error(
-        "Error in OpenAI speech-to-text conversion:",
-        error
-      );
+      elizaLogger2.error("Error in OpenAI speech-to-text conversion:", error);
       if (error.response) {
         elizaLogger2.error("Response data:", error.response.data);
         elizaLogger2.error("Response status:", error.response.status);
@@ -593,15 +606,127 @@ var TranscriptionService = class extends Service2 {
     }
   }
   /**
+   * Checks if a whisper model is already downloaded.
+   * @param modelName The name of the model to check
+   * @returns True if the model is already downloaded, false otherwise
+   */
+  async isWhisperModelDownloaded(modelName) {
+    try {
+      elizaLogger2.log(
+        `Checking if whisper model ${modelName} is already downloaded...`
+      );
+      const homeDir = os.homedir();
+      const whisperCacheDir = path.join(homeDir, ".cache", "whisper");
+      const modelFilename = `ggml-${modelName}.bin`;
+      const modelPath = path.join(whisperCacheDir, modelFilename);
+      const exists = fs.existsSync(modelPath);
+      if (exists) {
+        elizaLogger2.log(
+          `Whisper model ${modelName} is already downloaded at ${modelPath}`
+        );
+      } else {
+        elizaLogger2.log(`Whisper model ${modelName} is not downloaded yet`);
+      }
+      return exists;
+    } catch (error) {
+      elizaLogger2.error(
+        `Error checking if whisper model is downloaded: ${error}`
+      );
+      return false;
+    }
+  }
+  /**
+   * Downloads the whisper model explicitly before transcription.
+   * This ensures the model is available when transcription is needed.
+   */
+  async downloadWhisperModel(modelName) {
+    try {
+      const isDownloaded = await this.isWhisperModelDownloaded(modelName);
+      if (isDownloaded) {
+        elizaLogger2.log(
+          `Whisper model ${modelName} is already downloaded, skipping download`
+        );
+        return true;
+      }
+      if (this.isDownloadInProgress && this.currentDownloadPromise) {
+        elizaLogger2.log(
+          `A download for a whisper model is already in progress, waiting for it to complete...`
+        );
+        return await this.currentDownloadPromise;
+      }
+      this.isDownloadInProgress = true;
+      this.currentDownloadPromise = (async () => {
+        try {
+          elizaLogger2.log(`Explicitly downloading whisper model: ${modelName}`);
+          const { stderr } = await execAsync(
+            `npx nodejs-whisper download ${modelName}`
+          );
+          if (stderr && stderr.includes("Error")) {
+            elizaLogger2.error(`Error downloading whisper model: ${stderr}`);
+            return false;
+          }
+          elizaLogger2.log(
+            `Successfully downloaded whisper model: ${modelName}`
+          );
+          return true;
+        } catch (error) {
+          elizaLogger2.error(`Failed to download whisper model: ${error}`);
+          return false;
+        } finally {
+          this.isDownloadInProgress = false;
+        }
+      })();
+      return await this.currentDownloadPromise;
+    } catch (error) {
+      elizaLogger2.error(`Error in downloadWhisperModel: ${error}`);
+      this.isDownloadInProgress = false;
+      return false;
+    }
+  }
+  /**
+   * Public method to preload the whisper model.
+   * This can be called separately to ensure the model is downloaded before any transcription is needed.
+   */
+  async preloadWhisperModel(modelName = "base.en") {
+    elizaLogger2.log(`Preloading whisper model: ${modelName}`);
+    const result = await this.downloadWhisperModel(modelName);
+    if (result) {
+      this.isWhisperModelPreloaded = true;
+      elizaLogger2.log(`Whisper model ${modelName} is now preloaded`);
+    }
+    return result;
+  }
+  /**
    * Local transcription with nodejs-whisper. We keep it as it was,
    * just making sure to handle CUDA if available.
    */
   async transcribeLocally(audioBuffer) {
+    var _a;
     try {
       elizaLogger2.log("Transcribing audio locally...");
+      const modelName = ((_a = this.transcriptionOptions) == null ? void 0 : _a.localModelName) ?? "base.en";
+      if (!this.isWhisperModelPreloaded) {
+        elizaLogger2.log(
+          `Whisper model not yet preloaded, waiting for download to complete...`
+        );
+        try {
+          const downloadResult = await this.preloadWhisperModel(modelName);
+          if (!downloadResult) {
+            elizaLogger2.error(
+              `Failed to download whisper model ${modelName}, will try fallback approach`
+            );
+          }
+        } catch (downloadError) {
+          elizaLogger2.error(
+            `Error during whisper model download: ${downloadError}`
+          );
+        }
+      }
       await this.saveDebugAudio(audioBuffer, "local_input_original");
       const arrayBuffer = new Uint8Array(audioBuffer).buffer;
-      const convertedBuffer = Buffer.from(await this.convertAudio(arrayBuffer)).buffer;
+      const convertedBuffer = Buffer.from(
+        await this.convertAudio(arrayBuffer)
+      ).buffer;
       await this.saveDebugAudio(convertedBuffer, "local_input_converted");
       const tempWavFile = path.join(
         this.CONTENT_CACHE_DIR,
@@ -611,8 +736,9 @@ var TranscriptionService = class extends Service2 {
       fs.writeFileSync(tempWavFile, uint8Array);
       elizaLogger2.debug(`Temporary WAV file created: ${tempWavFile}`);
       let output = await nodewhisper(tempWavFile, {
-        modelName: "base.en",
-        autoDownloadModelName: "base.en",
+        modelName,
+        autoDownloadModelName: modelName,
+        // Keep this as fallback
         removeWavFileAfterTranscription: false,
         withCuda: this.isCudaAvailable,
         whisperOptions: {
@@ -640,10 +766,7 @@ var TranscriptionService = class extends Service2 {
       }
       return output;
     } catch (error) {
-      elizaLogger2.error(
-        "Error in local speech-to-text conversion:",
-        error
-      );
+      elizaLogger2.error("Error in local speech-to-text conversion:", error);
       return null;
     }
   }
@@ -653,10 +776,7 @@ var TranscriptionService = class extends Service2 {
 var speechTTS = {
   name: "default",
   description: "Default plugin, with basic actions and evaluators",
-  services: [
-    new SpeechService(),
-    new TranscriptionService()
-  ],
+  services: [new SpeechService(), new TranscriptionService()],
   actions: []
 };
 var index_default = speechTTS;

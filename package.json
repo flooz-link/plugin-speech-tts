@@ -1,5 +1,5 @@
 {
-  "name": "@elizaos-plugins/plugin-speech-tts",
+  "name": "@flooz-link/plugin-speech-tts",
   "version": "0.1.8+build.1",
   "type": "module",
   "main": "dist/index.js",
@@ -8,6 +8,7 @@
   "exports": {
     "./package.json": "./package.json",
     ".": {
+      "types": "./dist/index.d.ts",
       "import": {
         "@elizaos/source": "./src/index.ts",
         "types": "./dist/index.d.ts",
@@ -31,14 +32,28 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@babel/core": "^7.26.9",
+    "@babel/preset-env": "^7.26.9",
+    "@types/jest": "^29.5.14",
     "@types/node": "22.12.0",
+    "babel-jest": "^29.7.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.6",
     "tsup": "8.3.6",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "@eslint/eslintrc": "3.1.0",
+    "@typescript-eslint/eslint-plugin": "^6.7.0",
+    "@typescript-eslint/parser": "^6.7.0",
+    "eslint": "^8.0.1",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-prettier": "^5.0.0",
+    "prettier": "^3.0.3"
   },
   "scripts": {
     "build": "tsup --format esm --dts",
     "dev": "tsup --format esm --dts --watch",
-    "lint": "eslint --fix  --cache ."
+    "lint": "eslint --fix  --cache .",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
   },
   "agentConfig": {
     "pluginType": "elizaos:client:1.0.0",
