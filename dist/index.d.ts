@@ -11,6 +11,8 @@ declare class SpeechService extends Service implements ISpeechService {
 interface TranscriptionOptions {
     rootDir?: string;
     localModelName?: string;
+    deepgramModelName?: string;
+    deepgramLanguage?: string;
 }
 
 declare class TranscriptionService extends Service implements ITranscriptionService {
@@ -33,7 +35,6 @@ declare class TranscriptionService extends Service implements ITranscriptionServ
     private queue;
     private processing;
     private transcriptionOptions;
-    private isWhisperModelPreloaded;
     private isDownloadInProgress;
     private currentDownloadPromise;
     /**
@@ -59,51 +60,13 @@ declare class TranscriptionService extends Service implements ITranscriptionServ
      * CHANGED: processQueue() uses the final transcriptionProvider enum set in initialize().
      */
     private processQueue;
-    /**
-     * Original logic from main is now handled by the final fallback in initialize().
-     * We'll keep transcribeUsingDefaultLogic() if needed by other code references,
-     * but it's no longer invoked in the new flow.
-     */
-    private transcribeUsingDefaultLogic;
     private transcribeWithDeepgram;
     private transcribeWithOpenAI;
-    /**
-     * Transcribes audio locally with streaming results.
-     * This method processes the audio and emits transcription results as they become available.
-     * @param audioBuffer The audio buffer to transcribe
-     * @returns An AsyncGenerator that yields partial transcription results and completes with the final result
-     */
-    transcribeLocallyStreaming(audioBuffer: ArrayBuffer): AsyncGenerator<string, string, undefined>;
-    /**
-     * Checks if a whisper model is already downloaded.
-     * @param modelName The name of the model to check
-     * @returns True if the model is already downloaded, false otherwise
-     */
-    private isWhisperModelDownloaded;
-    /**
-     * Downloads the whisper model explicitly before transcription.
-     * This ensures the model is available when transcription is needed.
-     */
-    private downloadWhisperModel;
-    /**
-     * Public method to preload the whisper model.
-     * This can be called separately to ensure the model is downloaded before any transcription is needed.
-     */
-    preloadWhisperModel(modelName?: string): Promise<boolean>;
     /**
      * Local transcription with nodejs-whisper. We keep it as it was,
      * just making sure to handle CUDA if available.
      */
     transcribeLocally(audioBuffer: ArrayBuffer): Promise<string | null>;
-}
-
-interface IStreamingTranscriptionService extends ITranscriptionService {
-    /**
-     * Transcribes audio locally with streaming capabilities using an AsyncGenerator
-     * @param audioBuffer The audio buffer to transcribe
-     * @returns An AsyncGenerator that yields partial transcription results and completes with the final result
-     */
-    transcribeLocallyStreaming(audioBuffer: ArrayBuffer): AsyncGenerator<string, string, undefined>;
 }
 
 declare const speechTTS: {
@@ -113,4 +76,4 @@ declare const speechTTS: {
     actions: any[];
 };
 
-export { type IStreamingTranscriptionService, SpeechService, type TranscriptionOptions, TranscriptionService, speechTTS as default };
+export { SpeechService, type TranscriptionOptions, TranscriptionService, speechTTS as default };

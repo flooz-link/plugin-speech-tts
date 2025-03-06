@@ -308,7 +308,6 @@ var TranscriptionService = class extends Service2 {
   queue = [];
   processing = false;
   transcriptionOptions;
-  isWhisperModelPreloaded = false;
   // Track if a download is currently in progress
   isDownloadInProgress = false;
   // Promise to track the current download process
@@ -320,21 +319,12 @@ var TranscriptionService = class extends Service2 {
    * 3) then old fallback logic (Deepgram -> OpenAI -> local).
    */
   async initialize(_runtime) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b;
     this.runtime = _runtime;
     const openaiBaseURL = this.runtime.getSetting("OPENAI_API_URL");
     elizaLogger2.log("OPENAI_API_URL", openaiBaseURL);
-    this.isWhisperModelPreloaded = false;
-    const modelName = ((_a = this.transcriptionOptions) == null ? void 0 : _a.localModelName) ?? "base.en";
-    const isAlreadyDownloaded = await this.isWhisperModelDownloaded(modelName);
-    if (isAlreadyDownloaded) {
-      this.isWhisperModelPreloaded = true;
-      elizaLogger2.log(
-        `Whisper model ${modelName} is already downloaded and ready to use`
-      );
-    }
     let chosenProvider = null;
-    const charSetting = (_c = (_b = this.runtime.character) == null ? void 0 : _b.settings) == null ? void 0 : _c.transcription;
+    const charSetting = (_b = (_a = this.runtime.character) == null ? void 0 : _a.settings) == null ? void 0 : _b.transcription;
     if (charSetting === TranscriptionProvider.Deepgram) {
       const deepgramKey = this.runtime.getSetting("DEEPGRAM_API_KEY");
       if (deepgramKey) {
@@ -349,8 +339,6 @@ var TranscriptionService = class extends Service2 {
       }
     } else if (charSetting === TranscriptionProvider.Local) {
       chosenProvider = TranscriptionProvider.Local;
-      const modelName2 = ((_d = this.transcriptionOptions) == null ? void 0 : _d.localModelName) ?? "base.en";
-      this.preloadWhisperModel(modelName2);
     }
     if (!chosenProvider) {
       const envProvider = this.runtime.getSetting("TRANSCRIPTION_PROVIDER");
@@ -398,8 +386,6 @@ var TranscriptionService = class extends Service2 {
           chosenProvider = TranscriptionProvider.OpenAI;
         } else {
           chosenProvider = TranscriptionProvider.Local;
-          const modelName2 = ((_e = this.transcriptionOptions) == null ? void 0 : _e.localModelName) ?? "base.en";
-          this.preloadWhisperModel(modelName2);
         }
       }
     }
@@ -411,7 +397,9 @@ var TranscriptionService = class extends Service2 {
     super();
     this.transcriptionOptions = {
       rootDir: (transcriptionOptions == null ? void 0 : transcriptionOptions.rootDir) ?? path.resolve(__dirname, "../../"),
-      localModelName: (transcriptionOptions == null ? void 0 : transcriptionOptions.localModelName) ?? "base.en"
+      localModelName: (transcriptionOptions == null ? void 0 : transcriptionOptions.localModelName) ?? "base.en",
+      deepgramModelName: (transcriptionOptions == null ? void 0 : transcriptionOptions.deepgramModelName) ?? "nova-3",
+      deepgramLanguage: (transcriptionOptions == null ? void 0 : transcriptionOptions.deepgramLanguage) ?? "en-US"
     };
     const rootDir = (_a = this.transcriptionOptions) == null ? void 0 : _a.rootDir;
     this.CONTENT_CACHE_DIR = path.join(rootDir, "content_cache");
@@ -544,27 +532,16 @@ var TranscriptionService = class extends Service2 {
     }
     this.processing = false;
   }
-  /**
-   * Original logic from main is now handled by the final fallback in initialize().
-   * We'll keep transcribeUsingDefaultLogic() if needed by other code references,
-   * but it's no longer invoked in the new flow.
-   */
-  async transcribeUsingDefaultLogic(audioBuffer) {
-    if (this.deepgram) {
-      return await this.transcribeWithDeepgram(audioBuffer);
-    } else if (this.openai) {
-      return await this.transcribeWithOpenAI(audioBuffer);
-    }
-    return await this.transcribeLocally(audioBuffer);
-  }
   async transcribeWithDeepgram(audioBuffer) {
+    var _a, _b;
     const buffer = Buffer.from(audioBuffer);
     const response = await this.deepgram.listen.prerecorded.transcribeFile(
       buffer,
       {
-        model: "nova-2",
-        language: "en-US",
-        smart_format: true
+        model: ((_a = this.transcriptionOptions) == null ? void 0 : _a.deepgramModelName) ?? "nova-3",
+        language: ((_b = this.transcriptionOptions) == null ? void 0 : _b.deepgramLanguage) ?? "en-US",
+        smart_format: true,
+        detect_language: true
       }
     );
     const result = response.result.results.channels[0].alternatives[0].transcript;
@@ -606,225 +583,12 @@ var TranscriptionService = class extends Service2 {
     }
   }
   /**
-   * Transcribes audio locally with streaming results.
-   * This method processes the audio and emits transcription results as they become available.
-   * @param audioBuffer The audio buffer to transcribe
-   * @returns An AsyncGenerator that yields partial transcription results and completes with the final result
-   */
-  async *transcribeLocallyStreaming(audioBuffer) {
-    var _a;
-    try {
-      elizaLogger2.log("Transcribing audio locally with streaming...");
-      const modelName = ((_a = this.transcriptionOptions) == null ? void 0 : _a.localModelName) ?? "base.en";
-      if (!this.isWhisperModelPreloaded) {
-        elizaLogger2.log(
-          `Whisper model not yet preloaded, waiting for download to complete...`
-        );
-        try {
-          const downloadResult = await this.preloadWhisperModel(modelName);
-          if (!downloadResult) {
-            elizaLogger2.error(
-              `Failed to download whisper model ${modelName}, will try fallback approach`
-            );
-            throw new Error(`Failed to download whisper model ${modelName}`);
-          }
-        } catch (downloadError) {
-          elizaLogger2.error(
-            `Error during whisper model download: ${downloadError}`
-          );
-          throw downloadError;
-        }
-      }
-      await this.saveDebugAudio(audioBuffer, "local_streaming_input_original");
-      const arrayBuffer = new Uint8Array(audioBuffer).buffer;
-      const convertedBuffer = Buffer.from(
-        await this.convertAudio(arrayBuffer)
-      ).buffer;
-      await this.saveDebugAudio(
-        convertedBuffer,
-        "local_streaming_input_converted"
-      );
-      const tempWavFile = path.join(
-        this.CONTENT_CACHE_DIR,
-        `temp_streaming_${Date.now()}.wav`
-      );
-      const uint8Array = new Uint8Array(convertedBuffer);
-      fs.writeFileSync(tempWavFile, uint8Array);
-      elizaLogger2.debug(
-        `Temporary WAV file created for streaming: ${tempWavFile}`
-      );
-      let accumulatedText = "";
-      const output = await nodewhisper(tempWavFile, {
-        modelName,
-        autoDownloadModelName: modelName,
-        removeWavFileAfterTranscription: false,
-        withCuda: this.isCudaAvailable,
-        whisperOptions: {
-          outputInText: true,
-          outputInVtt: false,
-          outputInSrt: false,
-          outputInCsv: false,
-          translateToEnglish: false,
-          wordTimestamps: true,
-          // Enable word timestamps for streaming
-          timestamps_length: 10,
-          // Smaller segments for more frequent updates
-          splitOnWord: true
-          // Split on word boundaries
-        }
-      });
-      const lines = output.split("\n");
-      let currentSegment = "";
-      for (const line of lines) {
-        if (line.trim().startsWith("[")) {
-          if (currentSegment.trim()) {
-            accumulatedText += " " + currentSegment.trim();
-            yield accumulatedText.trim();
-            currentSegment = "";
-          }
-          const endIndex = line.indexOf("]");
-          if (endIndex !== -1) {
-            currentSegment = line.substring(endIndex + 1).trim();
-          }
-        } else if (line.trim()) {
-          currentSegment += " " + line.trim();
-        }
-      }
-      if (currentSegment.trim()) {
-        accumulatedText += " " + currentSegment.trim();
-        yield accumulatedText.trim();
-      }
-      fs.unlinkSync(tempWavFile);
-      if (accumulatedText.trim()) {
-        return accumulatedText.trim();
-      } else {
-        throw new Error("Transcription produced empty result");
-      }
-    } catch (error) {
-      elizaLogger2.error(
-        "Error in local streaming speech-to-text conversion:",
-        error
-      );
-      throw error;
-    }
-  }
-  /**
-   * Checks if a whisper model is already downloaded.
-   * @param modelName The name of the model to check
-   * @returns True if the model is already downloaded, false otherwise
-   */
-  async isWhisperModelDownloaded(modelName) {
-    try {
-      elizaLogger2.log(
-        `Checking if whisper model ${modelName} is already downloaded...`
-      );
-      const homeDir = os.homedir();
-      const whisperCacheDir = path.join(homeDir, ".cache", "whisper");
-      const modelFilename = `ggml-${modelName}.bin`;
-      const modelPath = path.join(whisperCacheDir, modelFilename);
-      const exists = fs.existsSync(modelPath);
-      if (exists) {
-        elizaLogger2.log(
-          `Whisper model ${modelName} is already downloaded at ${modelPath}`
-        );
-      } else {
-        elizaLogger2.log(`Whisper model ${modelName} is not downloaded yet`);
-      }
-      return exists;
-    } catch (error) {
-      elizaLogger2.error(
-        `Error checking if whisper model is downloaded: ${error}`
-      );
-      return false;
-    }
-  }
-  /**
-   * Downloads the whisper model explicitly before transcription.
-   * This ensures the model is available when transcription is needed.
-   */
-  async downloadWhisperModel(modelName) {
-    try {
-      const isDownloaded = await this.isWhisperModelDownloaded(modelName);
-      if (isDownloaded) {
-        elizaLogger2.log(
-          `Whisper model ${modelName} is already downloaded, skipping download`
-        );
-        return true;
-      }
-      if (this.isDownloadInProgress && this.currentDownloadPromise) {
-        elizaLogger2.log(
-          `A download for a whisper model is already in progress, waiting for it to complete...`
-        );
-        return await this.currentDownloadPromise;
-      }
-      this.isDownloadInProgress = true;
-      this.currentDownloadPromise = (async () => {
-        try {
-          elizaLogger2.log(`Explicitly downloading whisper model: ${modelName}`);
-          const { stderr } = await execAsync(
-            `npx nodejs-whisper download ${modelName}`
-          );
-          if (stderr && stderr.includes("Error")) {
-            elizaLogger2.error(`Error downloading whisper model: ${stderr}`);
-            return false;
-          }
-          elizaLogger2.log(
-            `Successfully downloaded whisper model: ${modelName}`
-          );
-          return true;
-        } catch (error) {
-          elizaLogger2.error(`Failed to download whisper model: ${error}`);
-          return false;
-        } finally {
-          this.isDownloadInProgress = false;
-        }
-      })();
-      return await this.currentDownloadPromise;
-    } catch (error) {
-      elizaLogger2.error(`Error in downloadWhisperModel: ${error}`);
-      this.isDownloadInProgress = false;
-      return false;
-    }
-  }
-  /**
-   * Public method to preload the whisper model.
-   * This can be called separately to ensure the model is downloaded before any transcription is needed.
-   */
-  async preloadWhisperModel(modelName = "base.en") {
-    elizaLogger2.log(`Preloading whisper model: ${modelName}`);
-    const result = await this.downloadWhisperModel(modelName);
-    if (result) {
-      this.isWhisperModelPreloaded = true;
-      elizaLogger2.log(`Whisper model ${modelName} is now preloaded`);
-    }
-    return result;
-  }
-  /**
    * Local transcription with nodejs-whisper. We keep it as it was,
    * just making sure to handle CUDA if available.
    */
   async transcribeLocally(audioBuffer) {
-    var _a;
     try {
       elizaLogger2.log("Transcribing audio locally...");
-      const modelName = ((_a = this.transcriptionOptions) == null ? void 0 : _a.localModelName) ?? "base.en";
-      if (!this.isWhisperModelPreloaded) {
-        elizaLogger2.log(
-          `Whisper model not yet preloaded, waiting for download to complete...`
-        );
-        try {
-          const downloadResult = await this.preloadWhisperModel(modelName);
-          if (!downloadResult) {
-            elizaLogger2.error(
-              `Failed to download whisper model ${modelName}, will try fallback approach`
-            );
-          }
-        } catch (downloadError) {
-          elizaLogger2.error(
-            `Error during whisper model download: ${downloadError}`
-          );
-        }
-      }
       await this.saveDebugAudio(audioBuffer, "local_input_original");
       const arrayBuffer = new Uint8Array(audioBuffer).buffer;
       const convertedBuffer = Buffer.from(
@@ -839,9 +603,8 @@ var TranscriptionService = class extends Service2 {
       fs.writeFileSync(tempWavFile, uint8Array);
       elizaLogger2.debug(`Temporary WAV file created: ${tempWavFile}`);
       let output = await nodewhisper(tempWavFile, {
-        modelName,
-        autoDownloadModelName: modelName,
-        // Keep this as fallback
+        modelName: "base.en",
+        autoDownloadModelName: "base.en",
         removeWavFileAfterTranscription: false,
         withCuda: this.isCudaAvailable,
         whisperOptions: {
@@ -874,12 +637,6 @@ var TranscriptionService = class extends Service2 {
     }
   }
 };
-
-// src/types.ts
-import { z } from "zod";
-var FileLocationResultSchema = z.object({
-  fileLocation: z.string().min(1)
-});
 
 // src/index.ts
 var speechTTS = {

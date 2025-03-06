@@ -24,8 +24,8 @@
     "tsup.config.ts"
   ],
   "dependencies": {
-    "@deepgram/sdk": "^3.9.0",
-    "@elizaos/core": "^0.25.9",
+    "@deepgram/sdk": "3.11.2",
+    "@elizaos/core": "0.1.9",
     "echogarden": "2.0.14",
     "formdata-node": "^6.0.3",
     "nodejs-whisper": "0.2.6",
@@ -54,7 +54,8 @@
     "build": "tsup --format esm --dts",
     "dev": "tsup --format esm --dts --watch",
     "lint": "eslint --fix  --cache .",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "cleanInstall": "rm -rf node_modules package-lock.json && npm install"
   },
   "agentConfig": {
     "pluginType": "elizaos:client:1.0.0",
