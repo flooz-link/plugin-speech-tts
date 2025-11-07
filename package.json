@@ -25,7 +25,7 @@
   ],
   "dependencies": {
     "@deepgram/sdk": "3.11.2",
-    "@elizaos/core": "0.1.9",
+    "@elizaos/core": "1.6.4",
     "echogarden": "2.0.14",
     "formdata-node": "^6.0.3",
     "nodejs-whisper": "0.2.6",
